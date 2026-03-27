@@ -17,6 +17,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[0]
 SAMPLE_NUM = 128
 LOG = False
 SAVE_MODEL = False
+MODEL_ID = "/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base"
+# Default dual-GPU setup (no env switch): train on cuda:0, evaluate with vLLM on cuda:1.
+TRAIN_DEVICE_ID = 0
+VLLM_DEVICE_ID = 1
+VLLM_GPU_MEMORY_UTILIZATION = 0.85
 
 def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: float = 0.85):
     """ Start the inference process, 
@@ -42,16 +47,17 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
         )
 
 def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM):
-    state_dict = policy.state_dict()
+    # GPU0 -> CPU -> GPU1, more stable copy
+    state_dict = {name: tensor.detach().cpu() for name, tensor in policy.state_dict().items()}
     llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
     llm_model.load_weights(state_dict.items())
 
-def evaluate(policy: PreTrainedModel, eval_prompts, eval_gts, device):
+def evaluate(policy: PreTrainedModel, eval_prompts, eval_gts, vllm_device: str):
     llm = init_vllm(
-        model_id="/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base",
-        device=device,
+        model_id=MODEL_ID,
+        device=vllm_device,
         seed=42,
-        gpu_memory_utilization=0.3
+        gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION
     )
     load_policy_into_vllm_instance(policy, llm)
     sampling_params = SamplingParams(
@@ -63,13 +69,17 @@ def evaluate(policy: PreTrainedModel, eval_prompts, eval_gts, device):
 sft_data_dir = "/home/lin/cs336/dataset/sft-data/sft-reason/sft_gpt-oss-120b.jsonl"
 eval_data_dir = "/home/lin/cs336/dataset/sft-data/sft-reason/val.jsonl"
 save_dir = "/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base-SFT"
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 batch_size = 2
 gradient_accumulation_steps = 16
 
 if __name__ == "__main__":
-    sft_data = json.load(open(sft_data_dir,"r"))
-    eval_data = json.load(open(eval_data_dir,"r"))
+    if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
+        raise RuntimeError("Dual-GPU mode requires at least 2 visible CUDA devices.")
+    train_device = torch.device(f"cuda:{TRAIN_DEVICE_ID}")
+    vllm_device = f"cuda:{VLLM_DEVICE_ID}"
+
+    sft_data = [json.loads(line) for line in open(sft_data_dir, "r")]
+    eval_data = [json.loads(line) for line in open(eval_data_dir, "r")]
 
     r1_zero_prompt = open(str(PROJECT_ROOT) + "/prompts/r1_zero.prompt", "r").read()
 
@@ -86,12 +96,12 @@ if __name__ == "__main__":
     sampled_responses = [responses[i] for i in random_index]
 
     model = AutoModelForCausalLM.from_pretrained(
-        "/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base",
+        MODEL_ID,
         dtype=torch.float16,
         attn_implementation="flash_attention_2",
-    ).to(device)
+    ).to(train_device)
     tokenizer = AutoTokenizer.from_pretrained(
-        "/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base",
+        MODEL_ID,
     )
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -104,9 +114,9 @@ if __name__ == "__main__":
         logger = Logger(project="sft", name=f"num_example_{SAMPLE_NUM}")
 
     train_batch = tokenize_prompt_and_output(sampled_prompts, sampled_responses, tokenizer)
-    input_ids = train_batch["input_ids"].to(device) # (B,S)
-    labels = train_batch["labels"].to(device) # (B,S)
-    masks = train_batch["response_mask"].to(device) # (B,S)
+    input_ids = train_batch["input_ids"].to(train_device) # (B,S)
+    labels = train_batch["labels"].to(train_device) # (B,S)
+    masks = train_batch["response_mask"].to(train_device) # (B,S)
 
     model.train()
     optimizer.zero_grad()
@@ -121,10 +131,10 @@ if __name__ == "__main__":
         log_probs = result["log_probs"]
         entropy = result["token_entropy"]
 
-        if LOG: # each microbatch
-            logger.log_train(loss=loss.item(), entropy=entropy)
-
         loss, _ = sft_microbatch_train_step(log_probs, batch_masks, gradient_accumulation_steps)
+        if LOG: # each microbatch
+            entropy_value = ((entropy * batch_masks).sum() / batch_masks.sum().clamp_min(1)).item()
+            logger.log_train(loss=loss.item(), entropy=entropy_value)
 
         if step % gradient_accumulation_steps == 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -133,7 +143,8 @@ if __name__ == "__main__":
 
             model.eval()
             with torch.no_grad():
-                eval_result = evaluate(model, eval_prompts, eval_gts, device)
+                torch.cuda.empty_cache()
+                eval_result = evaluate(model, eval_prompts, eval_gts, vllm_device)
             model.train()
 
             print(f"it:{step}, train/loss:{loss.item():.4f}, eval/acc:{eval_result['acc']:.4f}, eval/format_acc:{eval_result['format_acc']:.4f}")
@@ -149,4 +160,5 @@ if __name__ == "__main__":
         model.save_pretrained(save_dir)
         tokenizer.save_pretrained(save_dir)
 
-    logger.finish()
+    if LOG:
+        logger.finish()
