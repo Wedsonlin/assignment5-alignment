@@ -8,7 +8,13 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
-from cs336_alignment.utils import tokenize_prompt_and_output, compute_entropy
+from cs336_alignment.utils import (
+    tokenize_prompt_and_output, 
+    compute_entropy,
+    get_response_log_probs,
+    masked_normalize,
+    sft_microbatch_train_step
+)
 
 def run_tokenize_prompt_and_output(
     prompt_strs: list[str],
@@ -114,7 +120,7 @@ def run_get_response_log_probs(
                 we have not masked out the token indices corresponding to the prompt
                 or padding; that is done in the train loop.
     """
-    raise NotImplementedError
+    return get_response_log_probs(model, input_ids, labels, return_token_entropy)
 
 
 def run_compute_naive_policy_gradient_loss(
@@ -203,7 +209,7 @@ def run_sft_microbatch_train_step(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute the policy gradient loss and backprop its gradients for a microbatch.
     """
-    raise NotImplementedError
+    return sft_microbatch_train_step(policy_log_probs, response_mask, gradient_accumulation_steps, normalize_constant)
 
     
 def run_grpo_microbatch_train_step(
@@ -267,7 +273,7 @@ def run_masked_normalize(
         torch.Tensor, the normalized sum, where masked elements
             (mask=0) don't contribute to the sum.
     """
-    raise NotImplementedError
+    return masked_normalize(tensor, mask, normalize_constant, dim)
 
 
 """
