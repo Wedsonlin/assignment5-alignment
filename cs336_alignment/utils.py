@@ -1,3 +1,5 @@
+import json
+import json
 import random
 
 import torch
@@ -177,7 +179,7 @@ class Logger:
 
 class SFTDataset(Dataset):
     def __init__(self, path: str, sample_num: int = 0, seed: int = 0):
-        self.data = json.load(open(path, "r").read())
+        self.data = json.load(open(path, "r"))
 
         if sample_num > 0:
             rnd = random.Random(seed)

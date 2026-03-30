@@ -1,3 +1,4 @@
+import argparse
 import json
 import random
 from pathlib import Path
@@ -14,11 +15,10 @@ from evaluate import evaluate_vllm
 from drgrpo_grader import r1_zero_reward_fn
 
 PROJECT_ROOT = Path(__file__).resolve().parents[0]
+ROOT = PROJECT_ROOT.parents[1]
 SEED = 42
-SAMPLE_NUM = 128
 LOG = False
 SAVE_MODEL = False
-MODEL_ID = "/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base"
 # Default dual-GPU setup (no env switch): train on cuda:0, evaluate with vLLM on cuda:1.
 TRAIN_DEVICE_ID = 0
 VLLM_DEVICE_ID = 1
@@ -60,20 +60,28 @@ def evaluate(policy: PreTrainedModel, llm: LLM, eval_prompts, eval_gts, vllm_dev
     result = evaluate_vllm(llm, r1_zero_reward_fn, eval_prompts, eval_gts, sampling_params)
     return result
 
-sft_data_dir = "/home/lin/cs336/dataset/sft-data/sft-reason/sft_gpt-oss-120b.jsonl"
-eval_data_dir = "/home/lin/cs336/dataset/sft-data/sft-reason/val.jsonl"
-save_dir = "/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base-SFT"
+sft_data_dir = ROOT / "dataset/sft-data/sft-reason/sft_gpt-oss-120b.jsonl"
+eval_data_dir = ROOT / "dataset/sft-data/sft-reason/val.jsonl"
+save_dir = ROOT / "model/Qwen-2.5-Math-1.5B-Base-SFT"
+MODEL_ID = ROOT / "model/Qwen-2.5-Math-1.5B-Base"
+num_epoch = 3 # sft should use a small epoch size
 microbatch_size = 2
 gradient_accumulation_steps = 16
+eval_interval = 10  # evaluate every N optimizer steps
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sample-num", type=int, default=128)
+    args = parser.parse_args()
+    SAMPLE_NUM = args.sample_num
+
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         raise RuntimeError("Dual-GPU mode requires at least 2 visible CUDA devices.")
     train_device = torch.device(f"cuda:{TRAIN_DEVICE_ID}")
     vllm_device = f"cuda:{VLLM_DEVICE_ID}"
 
     sft_data = SFTDataset(path=sft_data_dir, sample_num=SAMPLE_NUM, seed=SEED)
-    eval_data = SFTDataset(path=sft_data_dir)
+    eval_data = SFTDataset(path=eval_data_dir)
 
     r1_zero_prompt = open(str(PROJECT_ROOT) + "/prompts/r1_zero.prompt", "r").read()
 
@@ -94,7 +102,7 @@ if __name__ == "__main__":
         MODEL_ID,
     )
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        policy.parameters(),
         lr=2e-5,
         weight_decay=0.01,
         betas=(0.9, 0.99),
@@ -110,50 +118,65 @@ if __name__ == "__main__":
     if LOG:
         logger = Logger(project="sft", name=f"num_example_{SAMPLE_NUM}")
 
-    train_batch = tokenize_prompt_and_output(sampled_prompts, sampled_responses, tokenizer)
+    train_batch = tokenize_prompt_and_output(prompts, responses, tokenizer)
     input_ids = train_batch["input_ids"].to(train_device) # (B,S)
     labels = train_batch["labels"].to(train_device) # (B,S)
     masks = train_batch["response_mask"].to(train_device) # (B,S)
 
     policy.train()
-    optimizer.zero_grad()
-    step = 1
-    for i in range(0, input_ids.shape[0], microbatch_size):
-        end = min(i + microbatch_size, input_ids.shape[0])
-        batch_input_ids = input_ids[i:end, :]
-        batch_labels = labels[i:end, :]
-        batch_masks = masks[i:end, :]
+    for epoch in range(num_epoch):
+        optimizer.zero_grad()
+        step = 1
 
-        result = get_response_log_probs(policy, batch_input_ids, batch_labels, return_token_entropy=True)
-        log_probs = result["log_probs"]
-        entropy = result["token_entropy"]
+        # random permutation in each epoch
+        perm = torch.randperm(input_ids.shape[0])
+        input_ids = input_ids[perm]
+        labels = labels[perm]
+        masks = masks[perm]
 
-        loss, _ = sft_microbatch_train_step(log_probs, batch_masks, gradient_accumulation_steps)
-        if LOG: # each microbatch
-            entropy_value = ((entropy * batch_masks).sum() / batch_masks.sum().clamp_min(1)).item()
-            logger.log_train(loss=loss.item(), entropy=entropy_value)
+        for i in range(0, input_ids.shape[0], microbatch_size):
+            end = min(i + microbatch_size, input_ids.shape[0])
+            batch_input_ids = input_ids[i:end, :]
+            batch_labels = labels[i:end, :]
+            batch_masks = masks[i:end, :]
 
-        if step % gradient_accumulation_steps == 0:
-            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
-            optimizer.step()
-            optimizer.zero_grad()
+            result = get_response_log_probs(policy, batch_input_ids, batch_labels, return_token_entropy=True)
+            log_probs = result["log_probs"]
+            entropy = result["token_entropy"]
 
-            policy.eval()
-            with torch.no_grad():
-                eval_result = evaluate(policy, llm, eval_prompts, eval_gts, vllm_device)
-            policy.train()
+            loss, _ = sft_microbatch_train_step(log_probs, batch_masks, gradient_accumulation_steps)
+            print(f"it:{step}, train/loss:{loss.item():.4f}")
+            if LOG: # each microbatch
+                entropy_value = ((entropy * batch_masks).sum() / batch_masks.sum().clamp_min(1)).item()
+                logger.log_train(loss=loss.item(), entropy=entropy_value)
 
-            print(f"it:{step}, train/loss:{loss.item():.4f}, eval/acc:{eval_result['acc']:.4f}, eval/format_acc:{eval_result['format_acc']:.4f}")
-            if LOG: # each minibatch
-                logger.log_eval( 
-                    acc=eval_result["acc"],
-                    format_acc=eval_result["format_acc"]
-                )
+            if step % gradient_accumulation_steps == 0:
+                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
+                optimizer.step()
+                optimizer.zero_grad()
 
-        step += 1
+                optimizer_step = step // gradient_accumulation_steps
+                if optimizer_step % eval_interval == 0:
+                    policy.eval()
+                    with torch.no_grad():
+                        eval_result = evaluate(policy, llm, eval_prompts, eval_gts, vllm_device)
+                    policy.train()
+
+                    print(
+                        f"it:{step}, train/loss:{loss.item():.4f}, "
+                        f"eval/acc:{eval_result['acc']:.4f}, eval/format_acc:{eval_result['format_acc']:.4f}"
+                    )
+                    if LOG:  # each eval step
+                        logger.log_eval(
+                            acc=eval_result["acc"],
+                            format_acc=eval_result["format_acc"]
+                        )
+
+            step += 1
+        print(f"Epoch {epoch + 1}/{num_epoch} done")
 
     if SAVE_MODEL:
-        model.save_pretrained(save_dir)
+        policy.save_pretrained(save_dir)
         tokenizer.save_pretrained(save_dir)
 
     if LOG:
