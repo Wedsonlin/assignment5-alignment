@@ -8,12 +8,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 from vllm.model_executor import set_random_seed as vllm_set_random_seed
 from unittest.mock import patch
 
-from utils import Logger
+from utils import Logger, SFTDataset
 from utils import tokenize_prompt_and_output, get_response_log_probs, sft_microbatch_train_step
 from evaluate import evaluate_vllm
 from drgrpo_grader import r1_zero_reward_fn
 
 PROJECT_ROOT = Path(__file__).resolve().parents[0]
+SEED = 42
 SAMPLE_NUM = 128
 LOG = False
 SAVE_MODEL = False
@@ -42,7 +43,6 @@ def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: flo
             model=model_id,
             device=device,
             dtype=torch.bfloat16,
-            enable_prefix_caching=True,
             gpu_memory_utilization=gpu_memory_utilization
         )
 
@@ -52,13 +52,7 @@ def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM):
     llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
     llm_model.load_weights(state_dict.items())
 
-def evaluate(policy: PreTrainedModel, eval_prompts, eval_gts, vllm_device: str):
-    llm = init_vllm(
-        model_id=MODEL_ID,
-        device=vllm_device,
-        seed=42,
-        gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION
-    )
+def evaluate(policy: PreTrainedModel, llm: LLM, eval_prompts, eval_gts, vllm_device: str):
     load_policy_into_vllm_instance(policy, llm)
     sampling_params = SamplingParams(
         temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True
@@ -69,7 +63,7 @@ def evaluate(policy: PreTrainedModel, eval_prompts, eval_gts, vllm_device: str):
 sft_data_dir = "/home/lin/cs336/dataset/sft-data/sft-reason/sft_gpt-oss-120b.jsonl"
 eval_data_dir = "/home/lin/cs336/dataset/sft-data/sft-reason/val.jsonl"
 save_dir = "/home/lin/cs336/model/Qwen-2.5-Math-1.5B-Base-SFT"
-batch_size = 2
+microbatch_size = 2
 gradient_accumulation_steps = 16
 
 if __name__ == "__main__":
@@ -78,8 +72,8 @@ if __name__ == "__main__":
     train_device = torch.device(f"cuda:{TRAIN_DEVICE_ID}")
     vllm_device = f"cuda:{VLLM_DEVICE_ID}"
 
-    sft_data = [json.loads(line) for line in open(sft_data_dir, "r")]
-    eval_data = [json.loads(line) for line in open(eval_data_dir, "r")]
+    sft_data = SFTDataset(path=sft_data_dir, sample_num=SAMPLE_NUM, seed=SEED)
+    eval_data = SFTDataset(path=sft_data_dir)
 
     r1_zero_prompt = open(str(PROJECT_ROOT) + "/prompts/r1_zero.prompt", "r").read()
 
@@ -91,11 +85,7 @@ if __name__ == "__main__":
     eval_gts = [str(ds["expected_answer"]) for ds in eval_data]
     assert len(eval_prompts) == len(eval_gts)
 
-    random_index = random.sample(range(len(prompts)), SAMPLE_NUM)
-    sampled_prompts = [prompts[i] for i in random_index]
-    sampled_responses = [responses[i] for i in random_index]
-
-    model = AutoModelForCausalLM.from_pretrained(
+    policy = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         dtype=torch.float16,
         attn_implementation="flash_attention_2",
@@ -105,11 +95,18 @@ if __name__ == "__main__":
     )
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=1e-5,
+        lr=2e-5,
         weight_decay=0.01,
         betas=(0.9, 0.99),
         eps=1e-8
     )
+    llm = init_vllm(
+        model_id=MODEL_ID,
+        device=vllm_device,
+        seed=SEED,
+        gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION
+    )
+
     if LOG:
         logger = Logger(project="sft", name=f"num_example_{SAMPLE_NUM}")
 
@@ -118,16 +115,16 @@ if __name__ == "__main__":
     labels = train_batch["labels"].to(train_device) # (B,S)
     masks = train_batch["response_mask"].to(train_device) # (B,S)
 
-    model.train()
+    policy.train()
     optimizer.zero_grad()
     step = 1
-    for i in range(0, input_ids.shape[0], batch_size):
-        end = min(i + batch_size, input_ids.shape[0])
+    for i in range(0, input_ids.shape[0], microbatch_size):
+        end = min(i + microbatch_size, input_ids.shape[0])
         batch_input_ids = input_ids[i:end, :]
         batch_labels = labels[i:end, :]
         batch_masks = masks[i:end, :]
 
-        result = get_response_log_probs(model, batch_input_ids, batch_labels, return_token_entropy=True)
+        result = get_response_log_probs(policy, batch_input_ids, batch_labels, return_token_entropy=True)
         log_probs = result["log_probs"]
         entropy = result["token_entropy"]
 
@@ -137,15 +134,14 @@ if __name__ == "__main__":
             logger.log_train(loss=loss.item(), entropy=entropy_value)
 
         if step % gradient_accumulation_steps == 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
 
-            model.eval()
+            policy.eval()
             with torch.no_grad():
-                torch.cuda.empty_cache()
-                eval_result = evaluate(model, eval_prompts, eval_gts, vllm_device)
-            model.train()
+                eval_result = evaluate(policy, llm, eval_prompts, eval_gts, vllm_device)
+            policy.train()
 
             print(f"it:{step}, train/loss:{loss.item():.4f}, eval/acc:{eval_result['acc']:.4f}, eval/format_acc:{eval_result['format_acc']:.4f}")
             if LOG: # each minibatch

@@ -1,5 +1,8 @@
+import random
+
 import torch
 from torch import Tensor
+from torch.utils.data import Dataset, DataLoader
 from transformers import PreTrainedTokenizerBase, PreTrainedModel
 import wandb
 
@@ -171,3 +174,18 @@ class Logger:
 
     def finish(self):
         self.run.finish()
+
+class SFTDataset(Dataset):
+    def __init__(self, path: str, sample_num: int = 0, seed: int = 0):
+        self.data = json.load(open(path, "r").read())
+
+        if sample_num > 0:
+            rnd = random.Random(seed)
+            rnd.shuffle(self.data)
+            self.data = self.data[:sample_num]
+    
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
