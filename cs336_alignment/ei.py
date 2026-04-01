@@ -1,3 +1,4 @@
+import argparse
 import random
 from pathlib import Path
 
@@ -11,6 +12,11 @@ from drgrpo_grader import r1_zero_reward_fn
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--G", type=int, default=2, help="Number of sampled outputs per question")
+    parser.add_argument("--epoch-size", type=int, default=1, help="SFT epochs per EI step")
+    args = parser.parse_args()
+
     BASE_DIR = "/root/autodl-tmp/"
     PROJECT_ROOT = Path(__file__).resolve().parents[0]
     SEED = 42
@@ -24,23 +30,23 @@ if __name__ == "__main__":
     ei_data_dir = BASE_DIR + "dataset/sft-data/sft-reason/train.jsonl"
     eval_data_dir = BASE_DIR + "dataset/sft-data/sft-reason/val.jsonl"
     save_dir = BASE_DIR + "model/Qwen-2.5-Math-1.5B-Base-EI/"
-    epoch_size = 3
 
     # sft params
+    epoch_size = args.epoch_size
     microbatch_size = 2
     gradient_accumulation_steps = 16
     warmup_ratio = 0.1
     eval_every_n_optim_steps = 4
 
     # ei params
-    sampling_temperature = 0.5
+    sampling_temperature = 1.0
     sampling_max_tokens = 1024
     sampling_min_tokens = 4
-    sampling_prompt_num = 4
-    G = 4
+    sampling_prompt_num = 512
+    G = args.G
     n_ei_steps = 5
 
-    ei_model_name = f"G_{G}_Epoch_{epoch_size}"
+    ei_model_name = f"G_{G}_E_{epoch_size}"
 
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         raise RuntimeError("Dual-GPU mode requires at least 2 visible CUDA devices.")
@@ -125,7 +131,6 @@ if __name__ == "__main__":
             policy=policy,
             tokenizer=tokenizer,
             optimizer=optimizer,
-            eval_llm=llm,
             train_device=train_device,
             epoch_size=epoch_size,
             microbatch_size=microbatch_size,
