@@ -14,7 +14,7 @@ def evaluate_vllm(
     prompts: list[str],
     ground_truths: list[str],
     eval_sampling_params: SamplingParams,
-) -> dict[str, object]:
+) -> dict[str, float]:
     """Evaluate a language model on a list of prompts and compute metrics."""
     outputs = vllm_model.generate(prompts, eval_sampling_params)
 

@@ -1,10 +1,9 @@
 import json
-import json
 import random
 
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase, PreTrainedModel
 import wandb
 
@@ -137,7 +136,7 @@ def sft_microbatch_train_step(
         metadata: dict with unscaled nll for logging
     """
     nll = masked_normalize(-policy_log_probs, response_mask, normalize_constant, dim=-1).mean()
-    scaled_loss = nll / gradient_accumulation_steps
+    scaled_loss = nll / float(gradient_accumulation_steps)
     scaled_loss.backward()
     return scaled_loss, {"nll": nll.detach()}
 
@@ -158,6 +157,7 @@ class Logger:
         self.train_step = 0
         self.eval_step = 0
 
+    @torch.no_grad()
     def log_train(self, loss: float, entropy: float):
         self.train_step += 1
         self.run.log({
@@ -166,6 +166,7 @@ class Logger:
             "train/entropy": entropy,
         })
 
+    @torch.no_grad()
     def log_eval(self, acc: float, format_acc: float):
         self.eval_step += 1
         self.run.log({
@@ -180,14 +181,18 @@ class Logger:
 class SFTDataset(Dataset):
     def __init__(self, path: str, sample_num: int = 0, seed: int = 0):
         self.data = json.load(open(path, "r"))
-
+        
         if sample_num > 0:
             rnd = random.Random(seed)
             rnd.shuffle(self.data)
             self.data = self.data[:sample_num]
-    
+
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         return self.data[idx]
+
+    def align(self, anchor: int):
+        self.data = self.data[:int(len(self.data)//anchor)*anchor]
+            

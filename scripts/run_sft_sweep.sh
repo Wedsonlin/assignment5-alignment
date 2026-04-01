@@ -1,13 +1,19 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-cd "$(dirname "$0")/../cs336_alignment"
+SAMPLE_NUMS=(128 256 512 1024 0)
 
-for N in 128 256 512 1024; do
-    echo "=========================================="
-    echo "Running SFT with SAMPLE_NUM=${N}"
-    echo "=========================================="
-    uv run python sft.py --sample-num "$N"
+for n in "${SAMPLE_NUMS[@]}"; do
+    if [ "$n" -eq 0 ]; then
+        num_label="all"
+    else
+        num_label="$n"
+    fi
+    echo "============================================"
+    echo "  Running SFT: filtered, sample_num=${num_label}"
+    echo "============================================"
+    uv run python cs336_alignment/sft.py --sample_num "$n" --filtered
+    echo "  Finished: filtered, sample_num=${num_label}"
     echo ""
 done
 
