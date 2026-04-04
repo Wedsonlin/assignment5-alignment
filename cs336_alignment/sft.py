@@ -62,6 +62,7 @@ def sft(
     epoch_size: int,
     microbatch_size: int,
     gradient_accumulation_steps: int,
+    max_length: int = 1024,
     eval_llm: LLM | None = None,
     eval_prompts: list[str] | None = None,
     eval_gts: list[str] | None = None,
@@ -80,7 +81,7 @@ def sft(
         num_training_steps=total_optim_steps,
     )
 
-    train_batch = tokenize_prompt_and_output(sft_prompts, sft_responses, tokenizer)
+    train_batch = tokenize_prompt_and_output(sft_prompts, sft_responses, tokenizer, max_length)
     input_ids = train_batch["input_ids"]   # (B,S)
     labels = train_batch["labels"]         # (B,S)
     masks = train_batch["response_mask"]   # (B,S)

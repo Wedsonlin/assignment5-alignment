@@ -135,6 +135,7 @@ if __name__ == "__main__":
             epoch_size=epoch_size,
             microbatch_size=microbatch_size,
             gradient_accumulation_steps=gradient_accumulation_steps,
+            max_length=sampling_max_tokens,
             logger=logger
         )
 
