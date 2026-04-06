@@ -304,7 +304,7 @@ if __name__ == "__main__":
 
     policy = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     ).to(train_device)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
