@@ -20,6 +20,7 @@ def evaluate_vllm(
 
     correct = 0
     format_correct = 0
+    answer_correct = 0
     eval_outcomes = []
 
     for output, gt in zip(outputs, ground_truths):
@@ -35,14 +36,16 @@ def evaluate_vllm(
 
         if reward["reward"] == 1.0:
             correct += 1
+        if reward["format_reward"] == 1.0:
             format_correct += 1
-        elif reward["format_reward"] == 1.0:
-            format_correct += 1
+        if reward["answer_reward"] == 1.0:
+            answer_correct += 1
 
     total = max(len(eval_outcomes), 1)
     return {
-        "acc": correct / total,
-        "format_acc": format_correct / total,
+        "total_reward": correct / total,
+        "format_reward": format_correct / total,
+        "answer_reward": answer_correct / total,
         "eval_outcomes": eval_outcomes,
     }
 

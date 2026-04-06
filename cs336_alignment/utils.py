@@ -1,5 +1,6 @@
 import json
 import random
+from typing import Any
 
 import torch
 from torch import Tensor
@@ -204,21 +205,19 @@ class Logger:
         self.train_step = 0
         self.eval_step = 0
 
-    def log_train(self, loss: float, entropy: float):
+    def log_train(self, item_dict: dict[str, Any]):
         self.train_step += 1
-        self.run.log({
-            "train_step": self.train_step,
-            "train/loss": loss,
-            "train/entropy": entropy,
-        })
+        log_dict = {"train_step": self.train_step}
+        for name,value in item_dict.items():
+            log_dict[f"train/{name}"] = value
+        self.run.log(log_dict)
 
-    def log_eval(self, acc: float, format_acc: float):
+    def log_eval(self, item_dict: dict[str, Any]):
         self.eval_step += 1
-        self.run.log({
-            "eval_step": self.eval_step,
-            "eval/acc": acc,
-            "eval/format_acc": format_acc,
-        })
+        log_dict = {"train_step": self.eval_step}
+        for name,value in item_dict.items():
+            log_dict[f"eval/{name}"] = value
+        self.run.log(log_dict)
 
     def finish(self):
         self.run.finish()

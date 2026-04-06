@@ -10,12 +10,16 @@ from vllm.model_executor import set_random_seed as vllm_set_random_seed
 from unittest.mock import patch
 
 from utils import Logger, SFTDataset
-from utils import tokenize_prompt_and_output, get_response_log_probs, sft_microbatch_train_step
+from utils import (
+                tokenize_prompt_and_output, 
+                get_response_log_probs, 
+                sft_microbatch_train_step,
+            )
 from evaluate import evaluate_vllm
 from drgrpo_grader import r1_zero_reward_fn
 
 
-def init_vllm(model_id: str, device: str, seed: int, gpu_memory_utilization: float = 0.85):
+def init_vllm(model_id: str, device: str, seed: int = 42, gpu_memory_utilization: float = 0.85):
     """ Start the inference process, 
         here we use vLLM to hold a model on a GPU separate from the policy.
     """
