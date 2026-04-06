@@ -114,7 +114,7 @@ def sft(
             print(f"epoch:{epoch+1}, micro:{micro_step}, train/nll:{nll:.4f}")
             if logger:
                 entropy_value = ((entropy * batch_masks).sum() / batch_masks.sum().clamp_min(1)).item()
-                logger.log_train(loss=nll, entropy=entropy_value)
+                logger.log_train({"loss": nll, "entropy": entropy_value})
 
             if micro_step % gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
@@ -130,12 +130,17 @@ def sft(
                     policy.train()
 
                     print(f"  [eval] optim_step:{optim_step}, lr:{scheduler.get_last_lr()[0]:.2e}, "
-                          f"eval/acc:{eval_result['acc']:.4f}, eval/format_acc:{eval_result['format_acc']:.4f}")
+                          f"eval/total_reward:{eval_result['total_reward']:.4f}, "
+                          f"eval/format_reward:{eval_result['format_reward']:.4f}, "
+                          f"eval/answer_reward:{eval_result['answer_reward']:.4f}, "
+                          f"eval/response_length:{eval_result['response_length']:.4f}")
                     if logger:
-                        logger.log_eval(
-                            acc=eval_result["acc"],
-                            format_acc=eval_result["format_acc"]
-                        )
+                        logger.log_eval({
+                            "total_reward": eval_result["total_reward"],
+                            "format_reward": eval_result["format_reward"],
+                            "answer_reward": eval_result["answer_reward"],
+                            "response_length": eval_result["response_length"],
+                        })
 
     if save_model_dir and sft_model_name:
         save_path = save_model_dir + sft_model_name
@@ -216,7 +221,7 @@ if __name__ == "__main__":
         seed=SEED,
         gpu_memory_utilization=VLLM_GPU_MEMORY_UTILIZATION
     )
-    logger = Logger(project="sft", name=sft_model_name)
+    logger = Logger(project="sft", name=sft_model_name) if LOG else None
 
     sft(
         sft_prompts=prompts,
@@ -237,4 +242,5 @@ if __name__ == "__main__":
         sft_model_name=sft_model_name,
     )
 
-    logger.finish()
+    if logger:
+        logger.finish()

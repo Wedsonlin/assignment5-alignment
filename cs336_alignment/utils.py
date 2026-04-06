@@ -9,50 +9,10 @@ from transformers import PreTrainedTokenizerBase, PreTrainedModel
 import wandb
 
 
-# def tokenize_prompt_and_output(
-#     prompt_strs: list[str],
-#     output_strs: list[str],
-#     tokenizer: PreTrainedTokenizerBase,
-# ) -> dict[str, Tensor]:
-#     """Tokenize the prompt and output strings, and construct a mask that is 1
-#     for the response tokens and 0 for other tokens (prompt or padding).
-
-#     Args:
-#         prompt_strs: list[str], the prompt strings.
-#         output_strs: list[str], the output strings.
-#         tokenizer: PreTrainedTokenizerBase, the tokenizer to use.
-#     """
-#     assert len(prompt_strs) == len(output_strs)
-
-#     prompt_ids = tokenizer(prompt_strs, add_special_tokens=False).input_ids
-#     output_ids = tokenizer(output_strs, add_special_tokens=False).input_ids
-
-#     prompt_output_ids = [{"input_ids": p + o} for p, o in zip(prompt_ids, output_ids)]
-#     full_ids = tokenizer.pad(prompt_output_ids, padding=True, return_tensors="pt").input_ids
-
-#     B, L = full_ids.shape
-#     prompt_lens = torch.tensor([len(p) for p in prompt_ids])
-#     output_lens = torch.tensor([len(o) for o in output_ids])
-#     positions = torch.arange(L).unsqueeze(0).expand(B, L)
-#     response_mask = (
-#         (positions >= prompt_lens.unsqueeze(1))
-#         & (positions < (prompt_lens + output_lens).unsqueeze(1))
-#     ).float()
-
-#     input_ids = full_ids[:, :-1]
-#     labels = full_ids[:, 1:]
-#     response_mask = response_mask[:, 1:]
-#     return {
-#         "input_ids": input_ids,
-#         "labels": labels,
-#         "response_mask": response_mask,
-#     }
-
 def tokenize_prompt_and_output(
     prompt_strs: list[str],
     output_strs: list[str],
     tokenizer: PreTrainedTokenizerBase,
-    max_length: int = 1024,
 ) -> dict[str, Tensor]:
     """Tokenize the prompt and output strings, and construct a mask that is 1
     for the response tokens and 0 for other tokens (prompt or padding).
@@ -61,25 +21,18 @@ def tokenize_prompt_and_output(
         prompt_strs: list[str], the prompt strings.
         output_strs: list[str], the output strings.
         tokenizer: PreTrainedTokenizerBase, the tokenizer to use.
-        max_length: int, max token length for the concatenated prompt+output.
     """
     assert len(prompt_strs) == len(output_strs)
 
     prompt_ids = tokenizer(prompt_strs, add_special_tokens=False).input_ids
     output_ids = tokenizer(output_strs, add_special_tokens=False).input_ids
 
-    combined = []
-    truncated_output_lens = []
-    for p, o in zip(prompt_ids, output_ids):
-        concat = (p + o)[:max_length]
-        combined.append({"input_ids": concat})
-        truncated_output_lens.append(max(0, len(concat) - len(p)))
-
-    full_ids = tokenizer.pad(combined, padding=True, return_tensors="pt").input_ids
+    prompt_output_ids = [{"input_ids": p + o} for p, o in zip(prompt_ids, output_ids)]
+    full_ids = tokenizer.pad(prompt_output_ids, padding=True, return_tensors="pt").input_ids
 
     B, L = full_ids.shape
     prompt_lens = torch.tensor([len(p) for p in prompt_ids])
-    output_lens = torch.tensor(truncated_output_lens)
+    output_lens = torch.tensor([len(o) for o in output_ids])
     positions = torch.arange(L).unsqueeze(0).expand(B, L)
     response_mask = (
         (positions >= prompt_lens.unsqueeze(1))
@@ -94,6 +47,53 @@ def tokenize_prompt_and_output(
         "labels": labels,
         "response_mask": response_mask,
     }
+
+# def tokenize_prompt_and_output(
+#     prompt_strs: list[str],
+#     output_strs: list[str],
+#     tokenizer: PreTrainedTokenizerBase,
+#     max_length: int = 1024,
+# ) -> dict[str, Tensor]:
+#     """Tokenize the prompt and output strings, and construct a mask that is 1
+#     for the response tokens and 0 for other tokens (prompt or padding).
+
+#     Args:
+#         prompt_strs: list[str], the prompt strings.
+#         output_strs: list[str], the output strings.
+#         tokenizer: PreTrainedTokenizerBase, the tokenizer to use.
+#         max_length: int, max token length for the concatenated prompt+output.
+#     """
+#     assert len(prompt_strs) == len(output_strs)
+
+#     prompt_ids = tokenizer(prompt_strs, add_special_tokens=False).input_ids
+#     output_ids = tokenizer(output_strs, add_special_tokens=False).input_ids
+
+#     combined = []
+#     truncated_output_lens = []
+#     for p, o in zip(prompt_ids, output_ids):
+#         concat = (p + o)[:max_length]
+#         combined.append({"input_ids": concat})
+#         truncated_output_lens.append(max(0, len(concat) - len(p)))
+
+#     full_ids = tokenizer.pad(combined, padding=True, return_tensors="pt").input_ids
+
+#     B, L = full_ids.shape
+#     prompt_lens = torch.tensor([len(p) for p in prompt_ids])
+#     output_lens = torch.tensor(truncated_output_lens)
+#     positions = torch.arange(L).unsqueeze(0).expand(B, L)
+#     response_mask = (
+#         (positions >= prompt_lens.unsqueeze(1))
+#         & (positions < (prompt_lens + output_lens).unsqueeze(1))
+#     ).float()
+
+#     input_ids = full_ids[:, :-1]
+#     labels = full_ids[:, 1:]
+#     response_mask = response_mask[:, 1:]
+#     return {
+#         "input_ids": input_ids,
+#         "labels": labels,
+#         "response_mask": response_mask,
+#     }
 
 
 def compute_entropy(logits: Tensor) -> Tensor:
@@ -214,7 +214,7 @@ class Logger:
 
     def log_eval(self, item_dict: dict[str, Any]):
         self.eval_step += 1
-        log_dict = {"train_step": self.eval_step}
+        log_dict = {"eval_step": self.eval_step}
         for name,value in item_dict.items():
             log_dict[f"eval/{name}"] = value
         self.run.log(log_dict)

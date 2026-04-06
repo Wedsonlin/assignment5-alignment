@@ -47,6 +47,8 @@ if __name__ == "__main__":
     n_ei_steps = 5
 
     ei_model_name = f"G_{G}_E_{epoch_size}"
+    random.seed(SEED)
+    torch.manual_seed(SEED)
 
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         raise RuntimeError("Dual-GPU mode requires at least 2 visible CUDA devices.")
@@ -102,7 +104,7 @@ if __name__ == "__main__":
         load_policy_into_vllm_instance(policy, llm)
 
         # Step 5: sample G outputs per question via vLLM
-        outputs = llm.generate(sampled_prompts, generation_params)
+        outputs = llm.generate(sampled_prompts, generation_params, use_tqdm=False)
 
         # Step 6-7: compute rewards and filter correct responses
         filtered_prompts = []
@@ -146,13 +148,17 @@ if __name__ == "__main__":
         policy.train()
 
         print(f"  [EI eval] step:{ei_step+1}, "
-              f"eval/acc:{eval_result['acc']:.4f}, "
-              f"eval/format_acc:{eval_result['format_acc']:.4f}")
+              f"eval/total_reward:{eval_result['total_reward']:.4f}, "
+              f"eval/format_reward:{eval_result['format_reward']:.4f}, "
+              f"eval/answer_reward:{eval_result['answer_reward']:.4f}, "
+              f"eval/response_length:{eval_result['response_length']:.4f}")
         if logger:
-            logger.log_eval(
-                acc=eval_result["acc"],
-                format_acc=eval_result["format_acc"],
-            )
+            logger.log_eval({
+                "total_reward": eval_result["total_reward"],
+                "format_reward": eval_result["format_reward"],
+                "answer_reward": eval_result["answer_reward"],
+                "response_length": eval_result["response_length"],
+            })
 
     if SAVE_MODEL:
         save_path = save_dir + ei_model_name

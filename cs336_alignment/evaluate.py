@@ -2,9 +2,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-import torch
 from vllm import LLM, SamplingParams
-from datasets import load_from_disk
 from drgrpo_grader import r1_zero_reward_fn
 
 
@@ -14,25 +12,31 @@ def evaluate_vllm(
     prompts: list[str],
     ground_truths: list[str],
     eval_sampling_params: SamplingParams,
+    return_outcomes: bool = False,
 ) -> dict[str, float]:
     """Evaluate a language model on a list of prompts and compute metrics."""
-    outputs = vllm_model.generate(prompts, eval_sampling_params)
+    outputs = vllm_model.generate(prompts, eval_sampling_params, use_tqdm=False)
 
     correct = 0
     format_correct = 0
     answer_correct = 0
-    eval_outcomes = []
+    response_length_sum = 0
+    eval_outcomes = [] if return_outcomes else None
 
     for output, gt in zip(outputs, ground_truths):
-        response = output.outputs[0].text
+        request_output = output.outputs[0]
+        response = request_output.text
+        token_ids = getattr(request_output, "token_ids", None)
+        response_length_sum += len(token_ids) if token_ids is not None else len(response)
         reward = reward_fn(response, gt)
 
-        eval_outcomes.append({
-            "prompt": output.prompt,
-            "response": response,
-            "ground_truth": gt,
-            "reward": reward,
-        })
+        if return_outcomes and eval_outcomes is not None:
+            eval_outcomes.append({
+                "prompt": output.prompt,
+                "response": response,
+                "ground_truth": gt,
+                "reward": reward,
+            })
 
         if reward["reward"] == 1.0:
             correct += 1
@@ -42,12 +46,15 @@ def evaluate_vllm(
             answer_correct += 1
 
     total = max(len(eval_outcomes), 1)
-    return {
+    result = {
         "total_reward": correct / total,
         "format_reward": format_correct / total,
         "answer_reward": answer_correct / total,
-        "eval_outcomes": eval_outcomes,
+        "response_length": response_length_sum / total,
     }
+    if return_outcomes and eval_outcomes is not None:
+        result["eval_outcomes"] = eval_outcomes
+    return result
 
 if __name__ == "__main__":
     ds = json.load(open("/home/lin/cs336/dataset/sft-data/sft-reason/val.jsonl","r"))
@@ -63,6 +70,17 @@ if __name__ == "__main__":
         stop=["</answer>"], include_stop_str_in_output=True,
     )
 
-    result = evaluate_vllm(llm, r1_zero_reward_fn, prompts, ground_truths, sampling_params)
-    print(f"acc: {result['acc']:.4f}, format_acc: {result['format_acc']:.4f}")
+    result = evaluate_vllm(
+        llm,
+        r1_zero_reward_fn,
+        prompts,
+        ground_truths,
+        sampling_params,
+        return_outcomes=True,
+    )
+    print(
+        f"total_reward: {result['total_reward']:.4f}, "
+        f"format_reward: {result['format_reward']:.4f}, "
+        f"answer_reward: {result['answer_reward']:.4f}"
+    )
     json.dump(result["eval_outcomes"], open(project_root / "eval_outcomes.json", "w"), ensure_ascii=False, indent=2)
