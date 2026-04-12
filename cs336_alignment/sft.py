@@ -2,6 +2,7 @@ import argparse
 import json
 import random
 from pathlib import Path
+from typing import Callable
 
 import torch
 from vllm import LLM, SamplingParams
@@ -48,17 +49,24 @@ def load_policy_into_vllm_instance(policy: PreTrainedModel, llm: LLM):
     llm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
     llm_model.load_weights(state_dict.items())
 
-def evaluate(policy: PreTrainedModel, llm: LLM, eval_prompts: list[str], eval_gts: list[str]):
+def evaluate(
+    policy: PreTrainedModel, 
+    llm: LLM, 
+    reward_fn: Callable[[str, str], dict[str, float]], 
+    eval_prompts: list[str], 
+    eval_gts: list[str]
+    ):
     load_policy_into_vllm_instance(policy, llm)
     sampling_params = SamplingParams(
         temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"], include_stop_str_in_output=True
     )
-    result = evaluate_vllm(llm, r1_zero_reward_fn, eval_prompts, eval_gts, sampling_params)
+    result = evaluate_vllm(llm, reward_fn, eval_prompts, eval_gts, sampling_params)
     return result
 
 def sft(
     sft_prompts: list[str],
     sft_responses: list[str],
+    reward_fn: Callable[[str, str], dict[str, float]],
     policy: PreTrainedModel,
     tokenizer: AutoTokenizer,
     optimizer,
@@ -126,7 +134,7 @@ def sft(
                 if eval_prompts and eval_gts and optim_step % eval_every_n_optim_steps == 0:
                     policy.eval()
                     with torch.no_grad():
-                        eval_result = evaluate(policy, eval_llm, eval_prompts, eval_gts)
+                        eval_result = evaluate(policy, eval_llm, reward_fn, eval_prompts, eval_gts)
                     policy.train()
 
                     print(f"  [eval] optim_step:{optim_step}, lr:{scheduler.get_last_lr()[0]:.2e}, "
@@ -236,6 +244,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=gradient_accumulation_steps,
         eval_prompts=eval_prompts,
         eval_gts=eval_gts,
+        reward_fn=r1_zero_reward_fn,
         eval_every_n_optim_steps=eval_every_n_optim_steps,
         logger=logger,
         save_model_dir=save_dir,

@@ -45,7 +45,7 @@ def evaluate_vllm(
         if reward["answer_reward"] == 1.0:
             answer_correct += 1
 
-    total = max(len(eval_outcomes), 1)
+    total = len(prompts)
     result = {
         "total_reward": correct / total,
         "format_reward": format_correct / total,

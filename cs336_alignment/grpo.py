@@ -220,7 +220,7 @@ def grpo(
 
                     policy.eval()
                     with torch.no_grad():
-                        train_rewards = evaluate(policy, vllm, rollout_prompts, rollout_groundtruths)
+                        train_rewards = evaluate(policy, vllm, reward_fn, rollout_prompts, rollout_groundtruths)
                     policy.train()
 
                     lr = optimizer.param_groups[0]["lr"]
@@ -257,7 +257,7 @@ def grpo(
         if (grpo_step + 1) % eval_every_n_grpo_steps == 0:
             policy.eval()
             with torch.no_grad():
-                eval_rewards = evaluate(policy, vllm, eval_prompts, eval_groundtruths)
+                eval_rewards = evaluate(policy, vllm, reward_fn, eval_prompts, eval_groundtruths)
             policy.train()
 
             lr = optimizer.param_groups[0]["lr"]
@@ -287,7 +287,7 @@ def grpo(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--lr", type=float, default=3e-5)
     parser.add_argument("--length-normalization", type=str, default="grpo",
                         choices=["grpo","dr.grpo"])
     parser.add_argument("--use-std-normalization", action="store_true")
@@ -306,7 +306,7 @@ if __name__ == "__main__":
     BASE_DIR = "/root/autodl-tmp/"
     PROJECT_ROOT = Path(__file__).resolve().parents[0]
     SEED = 42
-    LOG = False
+    LOG = True
     SAVE_MODEL = False
     MODEL_ID = BASE_DIR + "model/Qwen-2.5-Math-1.5B-Base"
     TRAIN_DEVICE_ID = 1

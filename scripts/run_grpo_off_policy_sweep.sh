@@ -1,17 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-# Off-policy GRPO broad sweep (n_grpo_steps=50).
-#
-# Full grid: epochs_per_rollout_batch x train_batch_size
-#   epochs  : 2  4  6  8          (all off-policy → grpo_clip required)
-#   train_bs: 32 64 128 256 512 1024
-#
-# grad_accum = train_bs / MICRO_BS  (MICRO_BS=2, same as default)
-# → micro batch size fixed at 2, GPU memory usage stays constant.
-#
-# Total: 4 x 6 = 24 runs.
-# On-policy baseline (epochs=1, train_bs=256) is run separately.
+Off-policy GRPO broad sweep (n_grpo_steps=50).
+
+Full grid: epochs_per_rollout_batch x train_batch_size
+  epochs  : 2  4  6  8          (all off-policy → grpo_clip required)
+  train_bs: 32 64 128 256 512 1024
+
+grad_accum = train_bs / MICRO_BS  (MICRO_BS=2, same as default)
+→ micro batch size fixed at 2, GPU memory usage stays constant.
+
+Total: 4 x 6 = 24 runs.
+On-policy baseline (epochs=1, train_bs=256) is run separately.
 
 PROJECT="grpo-off-policy-sweep"
 N_STEPS=50
@@ -20,7 +20,7 @@ MICRO_BS=2
 EPOCHS_LIST=(2 4 6 8)
 TRAIN_BS_LIST=(32 64 128 256 512)
 
-# On-policy baseline: epochs=1, train_bs=256
+On-policy baseline: epochs=1, train_bs=256
 echo "========================================"
 echo "  Project    : ${PROJECT}"
 echo "  Run        : grpo_ep1_bs256  [on-policy baseline]"
